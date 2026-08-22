@@ -1,0 +1,10 @@
+node_modules/
+.env
+/src/generated/prisma
+
+# Ignore auto-generated Prisma AI agent configurations
+.agents/
+.claude/
+.windsurf/
+skills-lock.json
+prisma.config.ts
