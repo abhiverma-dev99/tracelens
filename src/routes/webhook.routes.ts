@@ -6,7 +6,7 @@ const router = Router();
 // Expecting URL: /api/webhooks/github/<INGEST_KEY>
 router.post('/github/:ingestKey', async (req: Request, res: Response) => {
   try {
-    const { ingestKey } = req.params;
+    const ingestKey = req.params.ingestKey as string;
     const payload = req.body;
 
     // 1. Verify Project

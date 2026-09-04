@@ -59,3 +59,14 @@ model Deployment {
   projectId   String
   project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
 }
+
+model ArchivedIncident {
+  id         String   @id
+  message    String
+  stackTrace String?
+  service    String
+  status     String
+  createdAt  DateTime
+  updatedAt  DateTime
+  archivedAt DateTime @default(now())
+}

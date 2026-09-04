@@ -38,21 +38,27 @@ export const analyzeIncidentWithAI = async (
   stackTrace: string,
   recentCommits: any[],
 ) => {
-  const commitsText = recentCommits
-    .map((c) => `- Commit [${c.commitHash}] by ${c.author}: ${c.message}`)
-    .join("\n");
+  const commitsText =
+    recentCommits.length > 0
+      ? recentCommits
+          .map((c) => `- Commit [${c.commitHash}] by ${c.author}: ${c.message}`)
+          .join("\n")
+      : "No recent commits found.";
+
   const prompt = `
-        You are a senior software engineer. Analyze the following application error.
-        Error Message: ${message}
-        Stack Trace: ${stackTrace}
-        
-        Recent Commits (Deployments) that happened before this error:
-        ${commitsText || "No recent commits found."}
-        
-        Based on the stack trace and recent commits, figure out if a recent commit caused this issue.
-        Return ONLY a valid JSON object with exactly two keys: "rootCause" and "solution". 
-        Make it concise. Do not include markdown tags like \`\`\`json.
-    `;
+You are a senior software engineer debugging a critical production crash.
+Error Message: ${message}
+Stack Trace: ${stackTrace}
+
+CONTEXT - Recent Code Commits (Deployments) made right before this error:
+${commitsText}
+
+Task: 
+1. Analyze the stack trace.
+2. Cross-reference it with the "Recent Code Commits" to see if a recent change caused this.
+3. Return ONLY a valid JSON object with exactly two keys: "rootCause" (explain the technical issue and if a commit caused it) and "solution" (how to fix it).
+Do not include markdown tags like \`\`\`json.
+`;
 
   try {
     const model = genAI.getGenerativeModel({
@@ -62,7 +68,8 @@ export const analyzeIncidentWithAI = async (
     return parseAIResponse(result.response.text());
   } catch (geminiError) {
     console.warn(
-      "[AI Warning]: Gemini failed or invalid JSON. Switching to Groq (Llama 3)...",
+      "[AI Warning]: Gemini failed. Switching to Groq...",
+      geminiError,
     );
 
     try {
@@ -75,7 +82,7 @@ export const analyzeIncidentWithAI = async (
       return parseAIResponse(groqText);
     } catch (groqError) {
       console.error("[AI Error]: Both Gemini and Groq failed!", groqError);
-      return null;
+      throw new Error("AI Analysis completely failed.");
     }
   }
 };
