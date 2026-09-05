@@ -56,8 +56,17 @@ ${commitsText}
 Task: 
 1. Analyze the stack trace.
 2. Cross-reference it with the "Recent Code Commits" to see if a recent change caused this.
-3. Return ONLY a valid JSON object with exactly two keys: "rootCause" (explain the technical issue and if a commit caused it) and "solution" (how to fix it).
-Do not include markdown tags like \`\`\`json.
+3. Return ONLY a valid JSON object with exactly two keys: 
+   - "rootCause": Explain the precise technical issue and which commit likely caused it.
+   - "solution": DO NOT give theoretical explanations. Provide the exact actionable code snippet to fix the issue. Use this exact format:
+     
+     Before:
+     [code with bug]
+     
+     After:
+     [fixed code]
+
+Do not include markdown tags wrapping the entire JSON output like \`\`\`json.
 `;
 
   try {
