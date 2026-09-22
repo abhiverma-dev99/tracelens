@@ -135,7 +135,7 @@ export const signup = async (input: { name: unknown; email: unknown; password: u
         },
       });
 
-  let delivery: "smtp" | "console" = "smtp";
+  let delivery = "smtp";
   try {
     delivery = await deliverOtp(user.id, user.email);
   } catch (error) {
