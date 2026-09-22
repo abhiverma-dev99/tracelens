@@ -49,6 +49,7 @@ export const getRefreshCookieOptions = () => {
     sameSite: (isProd ? "none" : "lax") as "none" | "lax",
     path: "/api/auth",
     maxAge: REFRESH_TTL_MS,
+    partitioned: isProd,
   };
 };
 
