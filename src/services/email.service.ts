@@ -15,6 +15,7 @@ export const isSmtpConfigured = () =>
   Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASSWORD);
 
 export const getEmailDelivery = () => {
+  if (process.env.GMAIL_SCRIPT_URL) return "gmail-script";
   if (process.env.RESEND_API_KEY) return "resend";
   if (process.env.BREVO_API_KEY) return "brevo";
   if (isSmtpConfigured()) return "smtp";
@@ -38,6 +39,25 @@ const senderName = () => {
 
 const mailText = (otp: string) =>
   `Your TraceLens verification code is ${otp}. It expires in 10 minutes.`;
+
+const sendWithGmailScript = async (email: string, otp: string) => {
+  const response = await fetch(process.env.GMAIL_SCRIPT_URL as string, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    redirect: "follow",
+    body: JSON.stringify({
+      secret: process.env.GMAIL_SCRIPT_SECRET || "",
+      to: email,
+      subject: "Your TraceLens verification code",
+      text: mailText(otp),
+    }),
+  });
+
+  const body = await response.text();
+  if (!response.ok || body.includes("unauthorized") || body.includes("error")) {
+    throw new Error(`Gmail script ${response.status}: ${body}`);
+  }
+};
 
 const sendWithResend = async (email: string, otp: string) => {
   const response = await fetch("https://api.resend.com/emails", {
@@ -151,6 +171,10 @@ export const sendVerificationEmail = async (email: string, otp: string) => {
   }
 
   try {
+    if (channel === "gmail-script") {
+      await sendWithGmailScript(email, otp);
+      return "gmail-script" as const;
+    }
     if (channel === "resend") {
       await sendWithResend(email, otp);
       return "resend" as const;
