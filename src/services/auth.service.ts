@@ -116,7 +116,15 @@ export const signup = async (input: { name: unknown; email: unknown; password: u
   });
 
   const otp = await issueOtp(user.id);
-  const delivery = await sendVerificationEmail(user.email, otp);
+  let delivery: "smtp" | "console";
+  try {
+    delivery = await sendVerificationEmail(user.email, otp);
+  } catch (error) {
+    throw new AuthError(
+      error instanceof Error ? error.message : "Could not send the verification email.",
+      503,
+    );
+  }
 
   return {
     message:
@@ -182,7 +190,15 @@ export const resendOtp = async (input: { email: unknown }) => {
   if (user && !user.emailVerified) {
     try {
       const otp = await issueOtp(user.id);
-      const delivery = await sendVerificationEmail(user.email, otp);
+      let delivery: "smtp" | "console";
+      try {
+        delivery = await sendVerificationEmail(user.email, otp);
+      } catch (error) {
+        throw new AuthError(
+          error instanceof Error ? error.message : "Could not send the verification email.",
+          503,
+        );
+      }
       return {
         message:
           delivery === "console"

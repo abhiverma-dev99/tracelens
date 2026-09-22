@@ -4,6 +4,7 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import { createServer } from "http";
 import { getFrontendOrigins } from "./lib/origins.js";
+import { isSmtpConfigured } from "./services/email.service.js";
 import { initSocket } from "./lib/socket.js";
 
 import incidentRoutes from "./routes/incident.routes.js";
@@ -27,7 +28,11 @@ app.use(express.json());
 app.use(cookieParser());
 
 app.get("/health", (req: Request, res: Response) => {
-  res.json({ status: "success", message: "TraceLens API is running." });
+  res.json({
+    status: "success",
+    message: "TraceLens API is running.",
+    emailDelivery: isSmtpConfigured() ? "smtp" : "console",
+  });
 });
 
 app.use("/api/auth", authRoutes);
