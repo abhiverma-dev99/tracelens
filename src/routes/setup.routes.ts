@@ -4,6 +4,10 @@ import { prisma } from '../lib/prisma.js';
 const router = Router();
 
 router.get("/", async (req: Request, res: Response) => {
+  if (process.env.NODE_ENV === "production") {
+    return res.status(404).json({ error: "Not found" });
+  }
+
   try {
     let user = await prisma.user.findUnique({ where: { email: "test@tracelens.dev" }});
     

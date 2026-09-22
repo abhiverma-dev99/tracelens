@@ -40,7 +40,7 @@ router.post("/github/:ingestKey", async (req: Request, res: Response) => {
 
       const io = getIo();
       if (io) {
-        io.emit("new-deployment", deployment);
+        io.to(`project:${project.id}`).emit("new-deployment", deployment);
       }
     }
 

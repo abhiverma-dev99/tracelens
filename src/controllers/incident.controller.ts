@@ -1,26 +1,13 @@
 import { type Request, type Response } from "express";
 import { prisma } from "../lib/prisma.js";
-import { analyzeIncidentWithAI } from "../lib/ai.js";
+import { analyzeIncidentWithAI, analyzeIncidentWithAIStream } from "../lib/ai.js";
 import { getIo } from "../lib/socket.js";
 
-// POST Logic
 export const createIncident = async (req: Request, res: Response) => {
   try {
-    // 1. Extract the Ingest Key from headers
-    const authHeader = req.headers.authorization;
-    const ingestKey = authHeader?.split(" ")[1]; // Expects "Bearer <key>"
-
-    if (!ingestKey) {
-      return res
-        .status(401)
-        .json({ error: "Unauthorized", details: "Ingest key is missing." });
-    }
-
-    const project = await prisma.project.findUnique({ where: { ingestKey } });
+    const project = req.project;
     if (!project) {
-      return res
-        .status(401)
-        .json({ error: "Unauthorized", details: "Invalid ingest key." });
+      return res.status(401).json({ error: "Unauthorized" });
     }
 
     const { message, service, stackTrace } = req.body;
@@ -31,7 +18,6 @@ export const createIncident = async (req: Request, res: Response) => {
       });
     }
 
-    // 3. Save incident and link it to the project
     const newIncident = await prisma.incident.create({
       data: {
         message,
@@ -41,7 +27,7 @@ export const createIncident = async (req: Request, res: Response) => {
       },
     });
 
-    getIo().emit("new-incident", newIncident);
+    getIo().to(`project:${project.id}`).emit("new-incident", newIncident);
 
     return res.status(201).json({ status: "success", data: newIncident });
   } catch (error) {
@@ -53,35 +39,20 @@ export const createIncident = async (req: Request, res: Response) => {
   }
 };
 
-// GET Logic
 export const getAllIncidents = async (req: Request, res: Response) => {
   try {
-    // 1. Extract Ingest Key
-    const authHeader = req.headers.authorization;
-    const ingestKey = authHeader?.split(" ")[1];
-
-    if (!ingestKey) {
-      return res
-        .status(401)
-        .json({ error: "Unauthorized", details: "Ingest key is missing." });
-    }
-
-    // 2. Validate Key
-    const project = await prisma.project.findUnique({ where: { ingestKey } });
+    const project = req.project;
     if (!project) {
-      return res
-        .status(401)
-        .json({ error: "Unauthorized", details: "Invalid ingest key." });
+      return res.status(401).json({ error: "Unauthorized" });
     }
 
-    // Paginaton & Filter Parameters
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 20;
     const search = req.query.search as string;
     const status = req.query.status as string;
-    const services = req.query.services as string; // comma separated string
+    const services = req.query.services as string;
 
-    const whereClause: any = { projectId: project.id };
+    const whereClause: Record<string, unknown> = { projectId: project.id };
 
     if (status && status !== "ALL") whereClause.status = status;
     if (services) whereClause.service = { in: services.split(",") };
@@ -92,7 +63,6 @@ export const getAllIncidents = async (req: Request, res: Response) => {
       ];
     }
 
-    // Parallel execution for Performance
     const [incidents, totalCount, serviceAgg] = await Promise.all([
       prisma.incident.findMany({
         where: whereClause,
@@ -132,20 +102,15 @@ export const getAllIncidents = async (req: Request, res: Response) => {
   }
 };
 
-// AI function
 export const analyzeIncident = async (req: Request, res: Response) => {
   try {
-    // 1. Verify Authentication
-    const authHeader = req.headers.authorization;
-    const ingestKey = authHeader?.split(" ")[1];
-    if (!ingestKey) return res.status(401).json({ error: "Unauthorized" });
-
-    const project = await prisma.project.findUnique({ where: { ingestKey } });
-    if (!project) return res.status(401).json({ error: "Unauthorized" });
+    const project = req.project;
+    if (!project) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
 
     const id = req.params.id as string;
 
-    // FIX: Used findFirst instead of findUnique for multiple conditions
     const incident = await prisma.incident.findFirst({
       where: { id: id, projectId: project.id },
     });
@@ -156,14 +121,12 @@ export const analyzeIncident = async (req: Request, res: Response) => {
         .json({ error: "Incident not found in your project" });
     }
 
-    // 3. Fetch recent deployments for THIS project only
     const recentDeployments = await prisma.deployment.findMany({
-      where: { projectId: project.id }, // <-- Security check
+      where: { projectId: project.id },
       take: 3,
       orderBy: { deployedAt: "desc" },
     });
 
-    // 4. AI Analysis
     const aiResult = await analyzeIncidentWithAI(
       incident.message || "",
       incident.stackTrace || "",
@@ -173,7 +136,6 @@ export const analyzeIncident = async (req: Request, res: Response) => {
     if (!aiResult)
       return res.status(500).json({ error: "AI failed to analyze" });
 
-    // 5. Update Database
     const updatedIncident = await prisma.incident.update({
       where: { id: id },
       data: {
@@ -189,15 +151,80 @@ export const analyzeIncident = async (req: Request, res: Response) => {
   }
 };
 
+export const streamAnalyzeIncident = async (req: Request, res: Response) => {
+  const project = req.project;
+  if (!project) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const id = req.params.id as string;
+  const incident = await prisma.incident.findFirst({
+    where: { id, projectId: project.id },
+  });
+
+  if (!incident) {
+    return res.status(404).json({ error: "Incident not found in your project" });
+  }
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders?.();
+
+  const abort = new AbortController();
+  const onClose = () => abort.abort();
+  req.on("close", onClose);
+
+  const send = (payload: Record<string, unknown>) => {
+    if (res.writableEnded) return;
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  };
+
+  try {
+    const recentDeployments = await prisma.deployment.findMany({
+      where: { projectId: project.id },
+      take: 3,
+      orderBy: { deployedAt: "desc" },
+    });
+
+    const result = await analyzeIncidentWithAIStream(
+      incident.message || "",
+      incident.stackTrace || "",
+      recentDeployments,
+      (section, text) => {
+        send({ type: "chunk", section, text });
+      },
+      abort.signal,
+    );
+
+    if (!abort.signal.aborted) {
+      await prisma.incident.update({
+        where: { id },
+        data: {
+          aiRootCause: result.rootCause || incident.aiRootCause,
+          aiSolution: result.solution || incident.aiSolution,
+        },
+      });
+      send({ type: "done" });
+    }
+  } catch (error) {
+    console.error("[AI Stream Error]:", error);
+    send({ type: "error", message: "Unable to generate AI analysis" });
+  } finally {
+    req.off("close", onClose);
+    if (!res.writableEnded) {
+      res.end();
+    }
+  }
+};
+
 export const resolveIncident = async (req: Request, res: Response) => {
   try {
-    // FIX: Added security checks to ensure only project owner can resolve
-    const authHeader = req.headers.authorization;
-    const ingestKey = authHeader?.split(" ")[1];
-    if (!ingestKey) return res.status(401).json({ error: "Unauthorized" });
-
-    const project = await prisma.project.findUnique({ where: { ingestKey } });
-    if (!project) return res.status(401).json({ error: "Unauthorized" });
+    const project = req.project;
+    if (!project) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
 
     const id = req.params.id as string;
 
