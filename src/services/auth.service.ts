@@ -85,6 +85,21 @@ const createSession = async (user: { id: string; email: string }, res: Response)
   return accessToken;
 };
 
+const deliverOtp = async (userId: string, email: string) => {
+  try {
+    const otp = await issueOtp(userId);
+    return await sendVerificationEmail(email, otp);
+  } catch (error) {
+    if (error instanceof OtpError) {
+      throw new AuthError(error.message, error.status, error.code);
+    }
+    throw new AuthError(
+      error instanceof Error ? error.message : "Could not send the verification email.",
+      503,
+    );
+  }
+};
+
 const ensureProject = async (userId: string, name: string | null) => {
   const existing = await prisma.project.findFirst({ where: { userId } });
   if (existing) return existing;
@@ -102,28 +117,31 @@ export const signup = async (input: { name: unknown; email: unknown; password: u
   const password = input.password as string;
 
   const existing = await prisma.user.findUnique({ where: { email } });
-  if (existing) {
+  if (existing?.emailVerified) {
     throw new AuthError("An account with this email already exists.", 409);
   }
 
-  const user = await prisma.user.create({
-    data: {
-      name,
-      email,
-      passwordHash: await hashPassword(password),
-      emailVerified: false,
-    },
-  });
+  const user = existing
+    ? await prisma.user.update({
+        where: { id: existing.id },
+        data: { name, passwordHash: await hashPassword(password) },
+      })
+    : await prisma.user.create({
+        data: {
+          name,
+          email,
+          passwordHash: await hashPassword(password),
+          emailVerified: false,
+        },
+      });
 
-  const otp = await issueOtp(user.id);
-  let delivery: "smtp" | "console";
+  let delivery: "smtp" | "console" = "smtp";
   try {
-    delivery = await sendVerificationEmail(user.email, otp);
+    delivery = await deliverOtp(user.id, user.email);
   } catch (error) {
-    throw new AuthError(
-      error instanceof Error ? error.message : "Could not send the verification email.",
-      503,
-    );
+    if (!(error instanceof AuthError && error.code === "OTP_COOLDOWN")) {
+      throw error;
+    }
   }
 
   return {
@@ -188,30 +206,14 @@ export const resendOtp = async (input: { email: unknown }) => {
   const user = await prisma.user.findUnique({ where: { email } });
 
   if (user && !user.emailVerified) {
-    try {
-      const otp = await issueOtp(user.id);
-      let delivery: "smtp" | "console";
-      try {
-        delivery = await sendVerificationEmail(user.email, otp);
-      } catch (error) {
-        throw new AuthError(
-          error instanceof Error ? error.message : "Could not send the verification email.",
-          503,
-        );
-      }
-      return {
-        message:
-          delivery === "console"
-            ? "A new code was printed in the API server terminal."
-            : "If an unverified account exists, a new code was sent.",
-        delivery,
-      };
-    } catch (error) {
-      if (error instanceof OtpError) {
-        throw new AuthError(error.message, error.status, error.code);
-      }
-      throw error;
-    }
+    const delivery = await deliverOtp(user.id, user.email);
+    return {
+      message:
+        delivery === "console"
+          ? "A new code was printed in the API server terminal."
+          : "If an unverified account exists, a new code was sent.",
+      delivery,
+    };
   }
 
   return { message: "If an unverified account exists, a new code was sent." };
@@ -236,6 +238,13 @@ export const signin = async (
   }
 
   if (!user.emailVerified) {
+    try {
+      await deliverOtp(user.id, user.email);
+    } catch (error) {
+      if (!(error instanceof AuthError && error.code === "OTP_COOLDOWN")) {
+        throw error;
+      }
+    }
     throw new AuthError("Email verification is required.", 403, "OTP_REQUIRED");
   }
 
